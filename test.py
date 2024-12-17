@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import streamlit as st
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from mlxtend.frequent_patterns import apriori, association_rules
+from mlxtend.frequent_patterns import apriori, association_rules, fpgrowth
 import networkx as nx
 
 # Load the dataset
-file_path = r"D:\Users\pc\OneDrive\Documents\4cp\S1\ML\mini_projet\crop_yield.csv"
+file_path = r"crop_yield.csv"  # Adjust this path to your file location
 data = pd.read_csv(file_path)
 
 # Data Preprocessing
@@ -16,108 +16,98 @@ data['Rainfall_mm'] = pd.cut(data['Rainfall_mm'], bins=[0, 300, 600, 1000], labe
 data['Temperature_Celsius'] = pd.cut(data['Temperature_Celsius'], bins=[0, 15, 25, 35], labels=['Low', 'Medium', 'High'])
 data['Yield_tons_per_hectare'] = pd.cut(data['Yield_tons_per_hectare'], bins=[0, 3, 7, 10], labels=['Low', 'Medium', 'High'])
 
+# Encode categorical variables as one-hot encoding
 encoded_data = pd.get_dummies(data, columns=['Region', 'Soil_Type', 'Crop', 'Rainfall_mm',
                                              'Temperature_Celsius', 'Weather_Condition',
                                              'Fertilizer_Used', 'Irrigation_Used', 'Yield_tons_per_hectare'])
 
+# Drop irrelevant column and handle missing values
 transaction_data = encoded_data.drop(columns=['Days_to_Harvest'])
 transaction_data = transaction_data.dropna()
 transaction_data = transaction_data.sample(n=100, random_state=42)
 
-# Sidebar for user inputs
-st.sidebar.header('Apriori Algorithm Parameters')
+# Streamlit Sidebar for user inputs
+st.sidebar.header('Algorithm and Parameters')
+algorithm_choice = st.sidebar.selectbox('Choose Algorithm', ['Apriori', 'FP-Growth'])
 min_support = st.sidebar.slider('Min Support', 0.01, 0.1, 0.01, 0.01)
 min_confidence = st.sidebar.slider('Min Confidence', 0.5, 1.0, 0.6, 0.05)
 metric = st.sidebar.selectbox('Metric', ['confidence', 'lift'])
-# Sidebar for chart options
-st.sidebar.header('Chart Options')
-chart_option = st.sidebar.selectbox('Select Chart', 
-    ['Lift vs Confidence Scatter Plot', 
-     'Association Rules Graph', 
-     'Top 10 Rules by Lift Bar Plot', 
-     'Antecedents Frequency Pie Chart', 
-     'Antecedent-Consequence Heatmap'])
-# Apply Apriori Algorithm
-frequent_itemsets = apriori(transaction_data, min_support=min_support, use_colnames=True)
 
-# Generate association rules with the correct number of itemsets
+# Apply Apriori or FP-Growth Algorithm
+st.title('Association Rules for Crop Planning')
+if algorithm_choice == 'Apriori':
+    st.subheader('Using Apriori Algorithm')
+    frequent_itemsets = apriori(transaction_data, min_support=min_support, use_colnames=True)
+else:
+    st.subheader('Using FP-Growth Algorithm')
+    frequent_itemsets = fpgrowth(transaction_data, min_support=min_support, use_colnames=True)
+
+# Generate Association Rules
 rules = association_rules(frequent_itemsets, metric=metric, min_threshold=min_confidence, num_itemsets=len(frequent_itemsets))
 
-# Convert frozenset to a more readable string format
+# Convert frozenset to readable format
 rules['antecedents'] = rules['antecedents'].apply(lambda x: ', '.join(list(x)))
 rules['consequents'] = rules['consequents'].apply(lambda x: ', '.join(list(x)))
 
-# Display rules in Streamlit
-st.title('Association Rules')
+# Display Association Rules in Streamlit
 st.write("Top 10 Association Rules:")
 st.write(rules[['antecedents', 'consequents', 'support', 'confidence', 'lift']].head(10))
 
-# Save the rules to a CSV file
-csv_file = "association_rules_with_cof0.6.csv"
+# Save rules to a CSV file and provide download option
+csv_file = f"association_rules_{algorithm_choice.lower()}.csv"
 rules.to_csv(csv_file, index=False)
 
-# Provide a download button in Streamlit
 st.download_button(
-    label="Download Association Rules CSV",
+    label=f"Download {algorithm_choice} Association Rules CSV",
     data=open(csv_file, 'rb').read(),
     file_name=csv_file,
     mime="text/csv"
 )
 
+# Plot 1: Directed Graph for Association Rules
+st.subheader('Association Rules Graph')
+G = nx.DiGraph()
+for _, row in rules.iterrows():
+    antecedents = row['antecedents'].split(", ")
+    consequents = row['consequents'].split(", ")
+    for antecedent in antecedents:
+        for consequent in consequents:
+            G.add_edge(antecedent, consequent, weight=row['lift'])
 
+fig, ax = plt.subplots(figsize=(20, 20))
+pos = nx.spring_layout(G, k=0.5, iterations=20)
+nx.draw(G, pos, with_labels=True, font_weight='bold', node_color='lightblue', 
+        edge_color='gray', node_size=2000, font_size=10, ax=ax)
+ax.set_title(f'Association Rules for Crop Planning ({algorithm_choice})')
+st.pyplot(fig)  # Display the graph
 
-# Show the selected chart
-if chart_option == 'Lift vs Confidence Scatter Plot':
-    fig, ax = plt.subplots()
-    sns.scatterplot(x=rules['confidence'], y=rules['lift'], size=rules['support'], alpha=0.6, ax=ax)
-    ax.set_title('Lift vs Confidence')
-    ax.set_xlabel('Confidence')
-    ax.set_ylabel('Lift')
-    st.pyplot(fig)
- 
-elif chart_option == 'Association Rules Graph':
-    # Create a graph from the association rules
-    G = nx.DiGraph()
+# Plot 2: Pie Chart of Antecedents Frequency
+st.subheader('Distribution of Antecedents')
+antecedents_flat = [item for sublist in rules['antecedents'].str.split(', ') for item in sublist]
+antecedents_counts = pd.Series(antecedents_flat).value_counts()
 
-    for index, row in rules.iterrows():
-        for antecedent in row['antecedents']:
-            for consequent in row['consequents']:
-                G.add_edge(antecedent, consequent, weight=row['lift'])
+fig, ax = plt.subplots(figsize=(14, 14))
+antecedents_counts.plot.pie(autopct='%1.1f%%', startangle=90, cmap='Pastel1', ax=ax)
+ax.set_title('Distribution of Antecedents')
+ax.set_ylabel('')
+st.pyplot(fig)  # Display the pie chart
 
-    # Plot the graph
-    fig, ax = plt.subplots(figsize=(20, 20))
-    pos = nx.spring_layout(G, k=0.5, iterations=20)
-    nx.draw(G, pos, with_labels=True, font_weight='bold', node_color='lightblue', edge_color='gray', node_size=2000, ax=ax)
-    ax.set_title('Association Rules for Crop Planning')
-    st.pyplot(fig)
-elif chart_option == 'Top 10 Rules by Lift Bar Plot':
-    # Bar plot of top 10 rules by lift
-    top_rules = rules.nlargest(10, 'lift')
-    fig, ax = plt.subplots(figsize=(16, 6))
-    sns.barplot(x=top_rules['lift'].round(4), y=top_rules.index, palette='viridis', ax=ax)
-    ax.set_title('Top 10 Rules by Lift')
-    ax.set_xlabel('Lift')
-    ax.set_ylabel('Rules')
-    st.pyplot(fig)
+# Plot 3: Lift vs Confidence Scatter Plot
+st.subheader('Lift vs Confidence Scatter Plot')
+fig, ax = plt.subplots(figsize=(16, 10))
+scatter = ax.scatter(rules['confidence'], rules['lift'], s=rules['support'] * 1000, alpha=0.6, c='blue')
+ax.set_title('Lift vs Confidence')
+ax.set_xlabel('Confidence')
+ax.set_ylabel('Lift')
+ax.grid(True)
+st.pyplot(fig)  # Display scatter plot
 
-elif chart_option == 'Antecedents Frequency Pie Chart':
-    # Pie chart of antecedents frequency
-    antecedents_flat = [item for sublist in rules['antecedents'] for item in sublist]
-    antecedents_counts = pd.Series(antecedents_flat).value_counts()
-
-    fig, ax = plt.subplots(figsize=(16, 16))
-    antecedents_counts.plot.pie(autopct='%1.1f%%', startangle=90, cmap='Pastel1', ax=ax)
-    ax.set_title('Distribution of Antecedents')
-    ax.set_ylabel('')
-    st.pyplot(fig)
-
-elif chart_option == 'Antecedent-Consequence Heatmap':
-    # Create a pivot table of antecedents vs consequents with support as values
-    heatmap_data = rules.pivot_table(index='antecedents', columns='consequents', values='support', fill_value=0)
-
-    fig, ax = plt.subplots(figsize=(12, 8))
-    sns.heatmap(heatmap_data, cmap='YlGnBu', annot=True, fmt=".2f", ax=ax)
-    ax.set_title('Heatmap of Antecedent-Consequence Support')
-    ax.set_xlabel('Consequents')
-    ax.set_ylabel('Antecedents')
-    st.pyplot(fig)
+# Plot 4: Bar Plot of Top 10 Rules by Lift
+st.subheader('Top 10 Rules by Lift')
+top_rules = rules.nlargest(10, 'lift')
+fig, ax = plt.subplots(figsize=(16, 6))
+sns.barplot(x=top_rules['lift'].round(4), y=top_rules.index, palette='viridis', ax=ax)
+ax.set_title('Top 10 Rules by Lift')
+ax.set_xlabel('Lift')
+ax.set_ylabel('Rules')
+st.pyplot(fig)  # Display bar plot
